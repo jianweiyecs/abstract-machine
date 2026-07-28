@@ -25,6 +25,8 @@ while True:
   filepath = fp_filelist.readline().strip()
   if not filepath:
     break
+  if filepath[0] == '#':
+    continue
   varname = re.sub(r'\W', '_', filepath)
   writeasmline('.global __am_%s' % varname)
   writeasmline('__am_%s:' % varname)
