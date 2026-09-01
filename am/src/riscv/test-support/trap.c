@@ -25,6 +25,33 @@ struct trap_expect_state {
 
 static struct trap_expect_state g_expect;
 
+/*
+ * Bytes to skip past the insn at mepc. Never hardcode +4.
+ *
+ * Prefer mtval on illegal (spec: tval is the faulting insn encoding when
+ * implemented). Fetch/PF/misaligned-fetch must not load from mepc — that
+ * address may not be a valid data access.
+ *
+ * .word 0 is a 32-bit illegal (two zero halfwords). mtval==0 ⇒ 4, not
+ * c.unimp. Real 16-bit C (c.ebreak=0x9002) has bits[1:0]!=11 and mtval!=0
+ * when tval reports the insn.
+ */
+static uint64_t trap_insn_len(uint64_t mepc, uint64_t mcause, uint64_t mtval)
+{
+    if (mcause == CAUSE_ILLEGAL_INSTRUCTION) {
+        if (mtval == 0)
+            return 4;
+        return ((mtval & 0x3) == 0x3) ? 4 : 2;
+    }
+    if (mcause == CAUSE_MISALIGNED_FETCH || mcause == CAUSE_FETCH_ACCESS ||
+        mcause == CAUSE_FETCH_PAGE_FAULT)
+        return 4;
+    {
+        uint16_t half = *(volatile uint16_t *)(uintptr_t)mepc;
+        return ((half & 0x3) == 0x3) ? 4 : 2;
+    }
+}
+
 void trap_init(void) {
     g_expect.armed = 0;
     g_expect.taken = 0;
@@ -179,8 +206,14 @@ void m_trap_handler(uint64_t *frame) {
     {
         int how = g_expect.resume;
         void (*resolve)(void) = g_expect.resolve;
+        /*
+         * Default skip is the faulting insn length, not a hardcoded +4.
+         * C/Zca: bits[1:0] != 11 → 16-bit (e.g. c.ebreak = 0x9002).
+         * +4 on a 2-byte insn lands in the middle of the next 32-bit insn
+         * and the leftover half-word traps as illegal (cause=2, tval=0).
+         */
         uint64_t skip_pc = g_expect.recovery_pc ? g_expect.recovery_pc
-                                                : (mepc + 4);
+                                                : (mepc + trap_insn_len(mepc, mcause, mtval));
 
         g_expect.armed = 0;
         g_expect.taken = 1;
@@ -211,14 +244,14 @@ void m_trap_handler(uint64_t *frame) {
         /*
          * TRAP_LEAVE (default, existing tests):
          * S/U → priv_enter_* caller via priv_resume_m.
-         * M → mepc+4 or explicit recovery_pc.
+         * M → mepc+ilen or explicit recovery_pc.
          */
         if (prev != PRV_M) {
             frame[32] = (uint64_t)(uintptr_t)priv_resume_m;
         } else if (g_expect.recovery_pc != 0) {
             frame[32] = g_expect.recovery_pc;
         } else {
-            frame[32] = mepc + 4;
+            frame[32] = mepc + trap_insn_len(mepc, mcause, mtval);
         }
 
         mstatus &= ~MSTATUS_MPP;

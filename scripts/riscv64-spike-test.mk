@@ -86,6 +86,18 @@ ifdef EXTENSIONS
   endif
 endif
 
+# gcc -march concatenates V before C (`...dvc_...`); Spike requires
+# the canonical letter order (C before V). Keep RISCV_ARCH for the
+# compiler; feed Spike a spec-legal ISA string.
+# zicclsm: official Spike executes native misaligned load/store (Nanhu does).
+# First-gate for bug-it SQ cases. Do not rewrite those cases as sc_hw_* byte ops.
+SPIKE_ISA ?= RV64IMAFDC_zicsr_zifencei_zicclsm
+ifdef EXTENSIONS
+  ifneq ($(findstring V,$(EXTENSIONS)),)
+    SPIKE_ISA := RV64IMAFDCV_zicsr_zifencei_zicclsm
+  endif
+endif
+
 # Run command
 image: image-dep
 	@mkdir -p $(IMAGE_DIR) $(PLATFORM_ALLINONE)
@@ -96,6 +108,6 @@ image: image-dep
 
 run: image
 	@echo "# Running test on Spike..."
-	@$(SPIKE) --isa=$(RISCV_ARCH) $(IMAGE).elf
+	@$(SPIKE) --isa=$(SPIKE_ISA) $(IMAGE).elf
 
 .PHONY: run

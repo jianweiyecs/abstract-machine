@@ -90,6 +90,36 @@ extern "C" {
 #define MSTATUS_TW    (1UL << 21)
 #define MSTATUS_TSR   (1UL << 22)
 
+/* mnstatus (Smrnmi). NMIE is W1S: software can set, cannot clear. Reset is 0. */
+#define CSR_MNSTATUS    0x744
+#define MNSTATUS_NMIE   (1UL << 3)
+
+/* Sdtrig / debug CSRs (Debug Spec). tselect/tdata* are M-mode; dcsr/dpc
+ * are debug-mode only (csrr from M/S/U → illegal). */
+#define CSR_TSELECT     0x7a0
+#define CSR_TDATA1      0x7a1
+#define CSR_TDATA2      0x7a2
+#define CSR_TDATA3      0x7a3
+#define CSR_TINFO       0x7a4
+#define CSR_TCONTROL    0x7a5
+#define CSR_DCSR        0x7b0
+#define CSR_DPC         0x7b1
+#define CSR_DSCRATCH0   0x7b2
+#define CSR_DSCRATCH1   0x7b3
+
+#define DCSR_EBREAKM    (1UL << 15)
+#define DCSR_EBREAKS    (1UL << 13)
+#define DCSR_EBREAKU    (1UL << 12)
+#define DCSR_STEPIE     (1UL << 11)
+#define DCSR_STOPCOUNT  (1UL << 10)
+#define DCSR_STOPTIME   (1UL << 9)
+#define DCSR_MPRVEN     (1UL << 4)
+#define DCSR_NMIP       (1UL << 3)
+#define DCSR_STEP       (1UL << 2)
+
+#define TCONTROL_MTE    (1UL << 3)
+#define TCONTROL_MPTE   (1UL << 7)
+
 /* mstatus.VS (vector state): Off / Initial / Clean / Dirty */
 #define MSTATUS_VS_SHIFT 9
 #define MSTATUS_VS       (3UL << MSTATUS_VS_SHIFT)
@@ -245,7 +275,8 @@ void trap_capture(void);
  * then resume. Unexpected traps still fail immediately.
  *
  *   TRAP_LEAVE  — existing: S/U return to priv_enter_* caller; M skips
- *   TRAP_SKIP   — same privilege, mepc = recovery_pc or mepc+4
+ *   TRAP_SKIP   — same privilege, mepc = recovery_pc or mepc+ilen
+ *                 (ilen is 2 if insn[1:0]!=11, else 4; never hardcode +4)
  *   TRAP_RETRY  — same privilege, re-execute the faulting instruction
  *
  * resolve() may fix PTEs, sfence, and arm the *next* trap_expect / trap_on.
