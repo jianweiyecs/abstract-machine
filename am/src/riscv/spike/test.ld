@@ -42,13 +42,15 @@ SECTIONS
 
     . = ALIGN(16);
     __stack_bottom = .;
-    . += 0x10000; /* 64 KiB main stack */
+    . += 0x40000; /* 4 harts × 64 KiB */
     __stack_top = .;
+    PROVIDE(__stack_size = 0x10000);
 
     . = ALIGN(16);
     __mtrap_stack_bottom = .;
-    . += 0x4000; /* 16 KiB M-mode trap stack */
+    . += 0x10000; /* 4 harts × 16 KiB M-mode trap stack */
     __mtrap_stack_top = .;
+    PROVIDE(__mtrap_stack_size = 0x4000);
 
     . = ALIGN(4096);
     __page_arena_start = .;

@@ -71,7 +71,6 @@ m_trap_entry:
     ld      ra, 1*8(sp)
     ld      gp, 3*8(sp)
     ld      tp, 4*8(sp)
-    ld      t0, 5*8(sp)
     ld      t1, 6*8(sp)
     ld      t2, 7*8(sp)
     ld      s0, 8*8(sp)
@@ -99,9 +98,10 @@ m_trap_entry:
     ld      t5, 30*8(sp)
     ld      t6, 31*8(sp)
 
-    /* restore original sp into mscratch temp then swap back */
+    /* Restore sp without overwriting the interrupted t0. */
     ld      t0, 2*8(sp)
+    csrw    mscratch, t0
+    ld      t0, 5*8(sp)
     addi    sp, sp, 288
-    csrw    mscratch, sp       /* restore trap stack top for next trap */
-    mv      sp, t0
+    csrrw   sp, mscratch, sp   /* mscratch = trap stack top for next trap */
     mret

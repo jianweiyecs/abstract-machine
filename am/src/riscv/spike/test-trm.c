@@ -11,9 +11,12 @@ volatile uint64_t fromhost __attribute__((section(".tohost"), aligned(8))) = 0;
 
 /* Override AM's putch for test output */
 void putch(char c) {
-    /* Fire-and-forget UART write (no LSR polling to avoid hangs) */
+    /* Fire-and-forget UART write (no LSR polling to avoid hangs).
+     * Lock so multi-hart PASS/FAIL lines do not tear. */
     volatile uint8_t *uart = (volatile uint8_t *)UART_BASE;
+    hart_spin_lock(&hart_uart_lock);
     uart[UART_THR] = (uint8_t)c;
+    hart_spin_unlock(&hart_uart_lock);
 }
 
 /* Override AM's halt for test exit via HTIF tohost.

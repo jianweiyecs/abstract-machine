@@ -43,6 +43,9 @@ endif
 
 RISCV_ARCH := $(RISCV_MARCH_BASE)$(RISCV_MARCH_EXT)
 
+# Startup and trap code depend on V; never reuse objects across these modes.
+DST_DIR := $(DST_DIR)/$(if $(findstring V,$(EXTENSIONS)),v,base)
+
 # Compiler flags
 CFLAGS  += -march=$(RISCV_ARCH) -mabi=$(RISCV_ABI) -mcmodel=medany
 CFLAGS  += -ffreestanding -fno-builtin -fno-common -fno-stack-protector
@@ -68,6 +71,7 @@ override SRCS += $(AM_HOME)/am/src/riscv/test-support/start.S \
                  $(AM_HOME)/am/src/riscv/test-support/trap_entry.S \
                  $(AM_HOME)/am/src/riscv/test-support/priv_entry.S \
                  $(AM_HOME)/am/src/riscv/test-support/trap.c \
+                 $(AM_HOME)/am/src/riscv/test-support/hart.c \
                  $(AM_HOME)/am/src/riscv/test-support/assert.c \
                  $(AM_HOME)/am/src/riscv/test-support/priv.c \
                  $(AM_HOME)/am/src/riscv/test-support/pmp.c \
@@ -82,6 +86,7 @@ override SRCS += $(AM_HOME)/am/src/riscv/test-support/start.S \
 ifdef EXTENSIONS
   ifneq ($(findstring V,$(EXTENSIONS)),)
     override SRCS += $(AM_HOME)/am/src/riscv/test-support/vector.c \
+                     $(AM_HOME)/am/src/riscv/test-support/vector_init.S \
                      $(AM_HOME)/am/src/riscv/test-support/vector-test.c
   endif
 endif
@@ -98,16 +103,26 @@ ifdef EXTENSIONS
   endif
 endif
 
+# mpe suite is 4-hart. Do not hardlink into all-in-one: global spike-run is -p1
+# and hart_start() would hang waiting for a hart that does not exist.
+SPIKE_HARTS ?= 1
+ifeq ($(TEST_SUITE),mpe)
+  SPIKE_HARTS := 4
+endif
+
 # Run command
+# The published ELF name is shared by base/V builds; relink the selected mode.
+$(IMAGE).elf: force
+
 image: image-dep
 	@mkdir -p $(IMAGE_DIR) $(PLATFORM_ALLINONE)
-	@if [ "$(IMAGE_DIR)" != "$(PLATFORM_ALLINONE)" ]; then \
+	@if [ "$(IMAGE_DIR)" != "$(PLATFORM_ALLINONE)" ] && [ "$(TEST_SUITE)" != "mpe" ]; then \
 		ln -f $(IMAGE).elf $(PLATFORM_ALLINONE)/$(NAME).elf; \
 	fi
 	@echo "# Test image built: $(IMAGE).elf  [platform=$(PLATFORM_NAME)]"
 
 run: image
 	@echo "# Running test on Spike..."
-	@$(SPIKE) --isa=$(SPIKE_ISA) $(IMAGE).elf
+	@$(SPIKE) -p$(SPIKE_HARTS) --isa=$(SPIKE_ISA) $(IMAGE).elf
 
 .PHONY: run

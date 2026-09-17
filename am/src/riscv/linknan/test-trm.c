@@ -20,7 +20,9 @@
 
 void putch(char c) {
     volatile uint8_t *uart = (volatile uint8_t *)UART_BASE;
+    hart_spin_lock(&hart_uart_lock);
     uart[UART_THR] = (uint8_t)c;
+    hart_spin_unlock(&hart_uart_lock);
 }
 
 void halt(int code) {

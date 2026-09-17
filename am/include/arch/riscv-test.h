@@ -69,6 +69,9 @@ extern "C" {
 #define PRV_S 1UL
 #define PRV_M 3UL
 
+/* Fixed SMP size for test runtime (linker stacks, mailbox, Spike -p4). */
+#define HART_MAX 4U
+
 /* ============================================================================
  * mstatus / sstatus Bits
  * ========================================================================= */
@@ -173,6 +176,24 @@ extern "C" {
 #define CAUSE_LOAD_PAGE_FAULT     13UL
 #define CAUSE_STORE_PAGE_FAULT    15UL
 
+/* Interrupts: mcause.MSB = 1. MSIP is Spike CLINT only (see clint_msip_*). */
+#define MCAUSE_IRQ                (1UL << 63)
+#define IRQ_M_SOFT                3UL
+#define IRQ_M_TIMER               7UL
+#define IRQ_M_EXT                 11UL
+#define CAUSE_M_SOFTWARE_INT      (MCAUSE_IRQ | IRQ_M_SOFT)
+#define CAUSE_M_TIMER_INT         (MCAUSE_IRQ | IRQ_M_TIMER)
+#define CAUSE_M_EXTERNAL_INT      (MCAUSE_IRQ | IRQ_M_EXT)
+#define MIE_MSIE                  (1UL << 3)
+#define MIE_MTIE                  (1UL << 7)
+#define MIE_MEIE                  (1UL << 11)
+#define MIP_MSIP                  MIE_MSIE
+#define MIP_MTIP                  MIE_MTIE
+#define MIP_MEIP                  MIE_MEIE
+
+/* Spike CLINT. LinkNan default clintBase is 0x01000000 — IPI tests are Spike-only. */
+#define CLINT_BASE                0x02000000UL
+
 /* ============================================================================
  * satp (Supervisor Address Translation and Protection)
  * ========================================================================= */
@@ -223,6 +244,39 @@ static inline void fence_rw_rw(void) {
 static inline void wfi(void) {
     __asm__ volatile("wfi");
 }
+
+/* ============================================================================
+ * Multi-hart (MPE test runtime). Not AM mpe_init.
+ *
+ * Hart 0 runs main(). Harts 1..HART_MAX-1 poll a mailbox until hart_start().
+ * priv_enter_* / page_alloc_table remain hart-0 only.
+ * Only hart 0 may test_pass(); test_fail() from any hart is fail-fast.
+ * IPI: trap_on(CAUSE_M_SOFTWARE_INT, ..., TRAP_RETRY, clear_msip).
+ *      TRAP_LEAVE in M-mode skips the interrupted insn — wrong for MSIP.
+ * ========================================================================= */
+
+static inline unsigned hart_id(void) {
+    unsigned long id;
+    __asm__ volatile("csrr %0, mhartid" : "=r"(id));
+    return (unsigned)id;
+}
+
+unsigned hart_count(void);
+void hart_start(unsigned id, void (*fn)(void));
+void hart_join(unsigned id);
+void hart_barrier(unsigned n);
+
+typedef struct {
+    uint32_t lock;
+} hart_spinlock_t;
+
+void hart_spin_lock(hart_spinlock_t *lock);
+void hart_spin_unlock(hart_spinlock_t *lock);
+void clint_msip_set(unsigned hart);
+void clint_msip_clear(unsigned hart);
+
+/* UART putch lock — defined in hart.c, used by both platform TRMs. */
+extern hart_spinlock_t hart_uart_lock;
 
 /* ============================================================================
  * Test Environment: Assertions and Result Reporting
@@ -280,6 +334,12 @@ void trap_capture(void);
  *   TRAP_RETRY  — same privilege, re-execute the faulting instruction
  *
  * resolve() may fix PTEs, sfence, and arm the *next* trap_expect / trap_on.
+ * Automatic skip reads instruction bytes in the trapped address space with
+ * MXR enabled; PMP must permit the read. Fetch faults or unreadable code
+ * require an explicit PC via trap_skip_to() after trap_on(TRAP_SKIP), or
+ * recovery_pc in trap_expect() for M-mode LEAVE. RETRY and S/U LEAVE do
+ * not read instruction bytes. A .word 0 is two illegal 16-bit instructions
+ * when C is enabled; use .2byte 0 to request one compressed illegal insn.
  * Only one expect is armed at a time.
  */
 #define TRAP_LEAVE 0
@@ -288,6 +348,7 @@ void trap_capture(void);
 
 void trap_on(uint64_t cause, uint64_t tval, uint64_t tval_mask,
              int resume, void (*resolve)(void));
+void trap_skip_to(uint64_t recovery_pc);
 int trap_was_taken(void);
 uint64_t trap_last_cause(void);
 uint64_t trap_last_epc(void);
@@ -383,7 +444,14 @@ static inline void page_map_4k(uint64_t *root, uint64_t va, uint64_t pa, uint64_
 
 #ifdef EXT_V_ENABLED
 
-/* Enable mstatus.VS = Initial so vector ops are legal. */
+/* M-mode, destructive initialization of all v0..v31 at full VLEN.
+ * Called by start.S on every hart before any test code. Resets vl=0,
+ * vtype=vill, vstart=vcsr=0 and preserves mstatus (including VS/FS).
+ * A hart without misa.V is left untouched. Not an enable/resume operation. */
+void vector_init(void);
+
+/* Enable mstatus.VS = Initial; preserve vector registers and vector CSRs.
+ * Safe for trap retry after operands have already been prepared. */
 void vector_enable(void);
 
 /* Force mstatus.VS = Off (vector ops should trap illegal). */

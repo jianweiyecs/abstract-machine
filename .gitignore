@@ -10,11 +10,13 @@
 !*.mk
 !Makefile
 !README
+!README.md
+!docs/dut-linknan.md
 !LICENSE
+!AGENTS.md
 .*
 _*
 *~
 build/
 !.gitignore
 .vscode
-tests/
