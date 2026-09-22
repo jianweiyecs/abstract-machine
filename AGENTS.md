@@ -24,6 +24,7 @@
 - When reviewing content, be factual and objective.
 - Do not invent problems just to have something to report — if there are no issues, say so clearly.
 - If something is uncertain but lacks sufficient evidence, flag it as "to be confirmed" rather than forcing or exaggerating a problem.
+- Create files based on need, but avoid creating files whenever possible.
 
 ## Goal-Driven Execution
 - Before executing a task, define clear, actionable success criteria.
