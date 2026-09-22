@@ -2,7 +2,6 @@
 #include <arch/riscv-test.h>
 
 /* Platform constants for Spike */
-#define UART_BASE 0x10000000UL
 #define UART_THR  0x0
 
 /* HTIF exit mechanism for Spike */

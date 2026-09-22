@@ -22,7 +22,18 @@ void test_put_hex(uint64_t value) {
         putch(digits[(value >> i) & 0xf]);
 }
 
+void test_skip(const char *reason) {
+    test_puts("SKIP: ");
+    test_puts(reason);
+    test_puts("\n");
+    halt(77);
+}
+
 void test_pass(void) {
+    if (hart_id() != 0)
+        test_fail("test_pass from worker hart");
+    hart_check_complete();
+    trap_check_complete();
     test_puts(COLOR_GREEN "PASS" COLOR_RESET "\n");
     halt(0);
 }

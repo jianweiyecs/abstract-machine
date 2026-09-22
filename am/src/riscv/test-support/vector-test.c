@@ -12,12 +12,13 @@ void rvv_reset_csrs(void) {
     vector_write_vstart(0);
     rvv_write_vxrm(0);
     rvv_write_vxsat(0);
+#ifdef __riscv_flen
     rvv_write_fflags(0);
+#endif
 }
 
 void rvv_test_init(void) {
-    if (!vector_available())
-        test_fail("no misa.V");
+    TEST_REQUIRE(vector_available(), "requires misa.V");
     vector_enable();
     rvv_reset_csrs();
 }

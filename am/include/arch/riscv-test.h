@@ -69,8 +69,22 @@ extern "C" {
 #define PRV_S 1UL
 #define PRV_M 3UL
 
-/* Fixed SMP size for test runtime (linker stacks, mailbox, Spike -p4). */
-#define HART_MAX 4U
+/* Logical hart IDs are contiguous; physical IDs start at HART_BASE. */
+#if __riscv_xlen != 64
+#error "The test runtime currently supports RV64 only"
+#endif
+#ifndef HART_MAX
+#define HART_MAX 1
+#endif
+#ifndef HART_BASE
+#define HART_BASE 0
+#endif
+#if HART_MAX < 1 || HART_BASE < 0
+#error "HART_MAX must be positive and HART_BASE nonnegative"
+#endif
+#if HART_MAX > 1 && !defined(__riscv_atomic)
+#error "Multihart runtime requires the A extension"
+#endif
 
 /* ============================================================================
  * mstatus / sstatus Bits
@@ -176,7 +190,7 @@ extern "C" {
 #define CAUSE_LOAD_PAGE_FAULT     13UL
 #define CAUSE_STORE_PAGE_FAULT    15UL
 
-/* Interrupts: mcause.MSB = 1. MSIP is Spike CLINT only (see clint_msip_*). */
+/* Interrupts: mcause.MSB = 1. */
 #define MCAUSE_IRQ                (1UL << 63)
 #define IRQ_M_SOFT                3UL
 #define IRQ_M_TIMER               7UL
@@ -191,8 +205,7 @@ extern "C" {
 #define MIP_MTIP                  MIE_MTIE
 #define MIP_MEIP                  MIE_MEIE
 
-/* Spike CLINT. LinkNan default clintBase is 0x01000000 — IPI tests are Spike-only. */
-#define CLINT_BASE                0x02000000UL
+/* CLINT_BASE comes from the platform .mk; zero means unavailable. */
 
 /* ============================================================================
  * satp (Supervisor Address Translation and Protection)
@@ -251,19 +264,26 @@ static inline void wfi(void) {
  * Hart 0 runs main(). Harts 1..HART_MAX-1 poll a mailbox until hart_start().
  * priv_enter_* / page_alloc_table remain hart-0 only.
  * Only hart 0 may test_pass(); test_fail() from any hart is fail-fast.
+ * Hart 0 starts/joins workers and must join every task before test_pass().
+ * Starting another task on the same hart first joins the preceding task.
  * IPI: trap_on(CAUSE_M_SOFTWARE_INT, ..., TRAP_RETRY, clear_msip).
  *      TRAP_LEAVE in M-mode skips the interrupted insn — wrong for MSIP.
  * ========================================================================= */
 
-static inline unsigned hart_id(void) {
+static inline unsigned long hart_physical_id(void) {
     unsigned long id;
     __asm__ volatile("csrr %0, mhartid" : "=r"(id));
-    return (unsigned)id;
+    return id;
+}
+
+static inline unsigned hart_id(void) {
+    return (unsigned)(hart_physical_id() - HART_BASE);
 }
 
 unsigned hart_count(void);
 void hart_start(unsigned id, void (*fn)(void));
 void hart_join(unsigned id);
+void hart_check_complete(void);
 void hart_barrier(unsigned n);
 
 typedef struct {
@@ -284,6 +304,8 @@ extern hart_spinlock_t hart_uart_lock;
 
 void test_puts(const char *s);
 void test_put_hex(uint64_t value);
+void test_skip(const char *reason) __attribute__((noreturn));
+#define TEST_REQUIRE(cond, reason) do { if (!(cond)) test_skip(reason); } while (0)
 void test_pass(void) __attribute__((noreturn));
 void test_fail(const char *msg) __attribute__((noreturn));
 
@@ -318,6 +340,10 @@ void test_fail(const char *msg) __attribute__((noreturn));
  * ========================================================================= */
 
 void trap_init(void);
+/* PASS rejects outstanding expectations on every hart. Cancel only optional
+ * captures/expectations after independently checking the no-trap outcome. */
+void trap_cancel(void);
+void trap_check_complete(void);
 void trap_expect(uint64_t cause, uint64_t epc, uint64_t recovery_pc,
                  uint64_t tval, uint64_t tval_mask);
 /* Arm the handler but do not judge cause/tval here. Use with a local
@@ -334,6 +360,8 @@ void trap_capture(void);
  *   TRAP_RETRY  — same privilege, re-execute the faulting instruction
  *
  * resolve() may fix PTEs, sfence, and arm the *next* trap_expect / trap_on.
+ * Active FP/vector state is preserved across resolve(); mstatus FS/VS repairs
+ * are retained for RETRY/SKIP, including traps with FS/VS originally Off.
  * Automatic skip reads instruction bytes in the trapped address space with
  * MXR enabled; PMP must permit the read. Fetch faults or unreadable code
  * require an explicit PC via trap_skip_to() after trap_on(TRAP_SKIP), or
@@ -349,6 +377,10 @@ void trap_capture(void);
 void trap_on(uint64_t cause, uint64_t tval, uint64_t tval_mask,
              int resume, void (*resolve)(void));
 void trap_skip_to(uint64_t recovery_pc);
+#ifdef __riscv_flen
+/* Only from resolve(): retain deliberate frm/fflags repairs on return. */
+void trap_commit_fcsr(void);
+#endif
 int trap_was_taken(void);
 uint64_t trap_last_cause(void);
 uint64_t trap_last_epc(void);
@@ -449,6 +481,10 @@ static inline void page_map_4k(uint64_t *root, uint64_t va, uint64_t pa, uint64_
  * vtype=vill, vstart=vcsr=0 and preserves mstatus (including VS/FS).
  * A hart without misa.V is left untouched. Not an enable/resume operation. */
 void vector_init(void);
+
+/* Only from resolve(): retain deliberate vl/vtype/vstart/vcsr repairs on
+ * return. Vector register contents remain protected by the trap frame. */
+void trap_commit_vector_csrs(void);
 
 /* Enable mstatus.VS = Initial; preserve vector registers and vector CSRs.
  * Safe for trap retry after operands have already been prepared. */

@@ -104,6 +104,14 @@ LDFLAGS  += -z noexecstack $(addprefix -T, $(LDSCRIPTS))
 ### Paste in arch-specific configurations (e.g., from `scripts/x86_64-qemu.mk`)
 -include $(AM_HOME)/scripts/$(ARCH).mk
 
+# Keep objects for different runtime configurations in separate directories.
+# Quote shell input, including literal dollars/backticks in user flags.
+ifeq ($(TEST_RUNTIME),1)
+shell_quote = '$(subst ','"'"',$(1))'
+CONFIG_ID := $(shell { printf '%s\n' $(call shell_quote,$(CC)|$(CXX)|$(AS)|$(CFLAGS)|$(CXXFLAGS)|$(ASFLAGS)); $(CC) --version; } | sha256sum | cut -c1-20)
+DST_DIR := $(DST_DIR)/$(CONFIG_ID)
+endif
+
 ## 5. Compilation Rules
 
 ### Rule (compile): a single `.c` -> `.o` (gcc)
@@ -144,7 +152,8 @@ $(foreach lib, $(LIBS), $(eval $(call LIB_TEMPLATE,$(lib))))
 endif
 
 ### Rule (link): objects (`*.o`) and libraries (`*.a`) -> `IMAGE.elf`, the final ELF binary to be packed into image (ld)
-$(IMAGE).elf: $(LINKAGE) $(LDSCRIPTS)
+$(IMAGE).elf: $(LINKAGE) $(LDSCRIPTS) $(LINKER_DEPS)
+	@mkdir -p $(dir $@)
 	@echo \# Creating image [$(ARCH)]
 	@echo + LD "->" $(IMAGE_REL).elf
 ifneq ($(filter $(ARCH),native),)

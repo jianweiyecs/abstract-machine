@@ -4,6 +4,7 @@
 extern void priv_resume_m(void);
 
 struct trap_expect_state {
+    uint64_t *active_frame;
     int armed;
     int taken;
     int check;
@@ -27,9 +28,7 @@ static struct trap_expect_state g_expect[HART_MAX];
 
 static struct trap_expect_state *expect(void)
 {
-    unsigned long id;
-
-    __asm__ volatile("csrr %0, mhartid" : "=r"(id));
+    unsigned long id = hart_id();
     if (id >= (unsigned long)HART_MAX)
         test_fail("trap hart");
     return &g_expect[id];
@@ -83,10 +82,45 @@ void trap_init(void) {
     }
 }
 
+#ifdef __riscv_flen
+void trap_commit_fcsr(void) {
+    uint64_t *frame = expect()->active_frame;
+
+    if (!frame || !(csr_read(mstatus) & MSTATUS_FS))
+        test_fail("FCSR commit requires an active resolve and FS enabled");
+    frame[36] = csr_read(fcsr);
+}
+#endif
+
+#ifdef EXT_V_ENABLED
+void trap_commit_vector_csrs(void) {
+    uint64_t *frame = expect()->active_frame;
+
+    if (!frame || !(csr_read(mstatus) & MSTATUS_VS))
+        test_fail("vector CSR commit requires an active resolve and VS enabled");
+    frame[39] = csr_read(vl);
+    frame[40] = csr_read(vtype);
+    frame[41] = csr_read(vstart);
+    frame[42] = csr_read(vcsr);
+}
+#endif
+
+void trap_cancel(void) {
+    expect()->armed = 0;
+}
+
+void trap_check_complete(void) {
+    for (unsigned i = 0; i < HART_MAX; i++)
+        if (g_expect[i].armed)
+            test_fail("expected trap was not taken");
+}
+
 void trap_expect(uint64_t cause, uint64_t epc, uint64_t recovery_pc,
                  uint64_t tval, uint64_t tval_mask) {
     struct trap_expect_state *e = expect();
 
+    if (e->armed)
+        test_fail("overwriting an unconsumed trap expectation");
     e->armed = 1;
     e->taken = 0;
     e->check = 1;
@@ -102,6 +136,8 @@ void trap_expect(uint64_t cause, uint64_t epc, uint64_t recovery_pc,
 void trap_capture(void) {
     struct trap_expect_state *e = expect();
 
+    if (e->armed)
+        test_fail("overwriting an unconsumed trap expectation");
     e->armed = 1;
     e->taken = 0;
     e->check = 0;
@@ -118,6 +154,8 @@ void trap_on(uint64_t cause, uint64_t tval, uint64_t tval_mask,
              int resume, void (*resolve)(void)) {
     struct trap_expect_state *e = expect();
 
+    if (e->armed)
+        test_fail("overwriting an unconsumed trap expectation");
     e->armed = 1;
     e->taken = 0;
     e->check = 1;
@@ -183,11 +221,11 @@ void m_trap_handler(uint64_t *frame) {
     e->last_tval = mtval;
     e->last_status = mstatus;
 #ifdef EXT_V_ENABLED
-    /* Snapshot before the handler executes any code that could alter V CSRs. */
+    /* Assembly snapshots these before saving vector registers. */
     if ((mstatus & MSTATUS_VS) != MSTATUS_VS_OFF) {
-        e->last_vstart = csr_read(vstart);
-        e->last_vl = csr_read(vl);
-        e->last_vtype = csr_read(vtype);
+        e->last_vstart = frame[41];
+        e->last_vl = frame[39];
+        e->last_vtype = frame[40];
     } else {
         e->last_vstart = UINT64_MAX;
         e->last_vl = UINT64_MAX;
@@ -260,8 +298,10 @@ void m_trap_handler(uint64_t *frame) {
         e->resolve = 0;
 
         /* May arm the *next* trap_expect / trap_on. Must not consume skip_pc. */
+        e->active_frame = frame;
         if (resolve)
             resolve();
+        e->active_frame = 0;
 
         if (how == TRAP_RETRY || how == TRAP_SKIP) {
             /*

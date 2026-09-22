@@ -15,7 +15,6 @@
  */
 
 /* Nanhu/LinkNan UART (see LinkNan Spike platform.h CPU_NANHU) */
-#define UART_BASE 0x40600004UL
 #define UART_THR  0x0
 
 void putch(char c) {
