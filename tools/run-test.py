@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Run bare-metal tests with explicit results and per-test execution logs."""
 import argparse
+import fnmatch
 from collections import Counter
 import glob
 import hashlib
@@ -57,7 +58,13 @@ def main():
     parser.add_argument("--timeout", type=float, default=30)
     parser.add_argument("--elf", action="append", help="ELF path or glob; repeat for a batch")
     parser.add_argument("--expected", type=int, nargs="+", help="allowed batch counts")
+    parser.add_argument("--skip", action="append", default=[],
+                        metavar="PATTERN",
+                        help="fnmatch pattern matched against ELF stem; "
+                             "matching ELFs are counted as SKIP without running")
     parser.add_argument("--log-dir", type=Path)
+    parser.add_argument("--rerun-failed", metavar="RESULTS_JSON", type=Path,
+                        help="rerun only FAIL/TIMEOUT/ERROR ELFs from a prior results.json")
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     command = args.command[1:] if args.command[:1] == ["--"] else args.command
@@ -71,13 +78,36 @@ def main():
     if args.log_dir is None:
         parser.error("--elf requires --log-dir")
     files = sorted({Path(f) for pattern in args.elf for f in glob.glob(pattern)})
-    if not files or (args.expected is not None and len(files) not in args.expected):
+    if args.rerun_failed is not None:
+        prior = json.loads(args.rerun_failed.read_text())
+        retry_set = {Path(t["elf"]) for t in prior.get("tests", [])
+                     if t["result"] in ("FAIL", "TIMEOUT", "ERROR")}
+        files = [f for f in files if f in retry_set]
+        if not files:
+            print("RESULT=NOT_RUN: no FAIL/TIMEOUT/ERROR ELFs in prior results")
+            return 125
+    elif not files or (args.expected is not None and len(files) not in args.expected):
         print(f"RESULT=NOT_RUN: found {len(files)} ELFs, expected {args.expected or 'nonempty'}")
         return 125
     args.log_dir.mkdir(parents=True, exist_ok=True)
     results = []
     counts = Counter()
+    skip_patterns = args.skip or []
+    skip_pattern_hits = Counter()
     for elf in files:
+        # Honor --skip patterns matched against the ELF stem (no extension).
+        matched_pats = [p for p in skip_patterns if fnmatch.fnmatch(elf.stem, p)]
+        if matched_pats:
+            for p in matched_pats:
+                skip_pattern_hits[p] += 1
+            digest = hashlib.sha256(elf.read_bytes()).hexdigest()
+            log = args.log_dir / f"{len(results) + 1:04d}-{elf.stem}.log"
+            log.write_text(f"RESULT=SKIP\n")
+            counts["SKIP"] += 1
+            results.append(dict(elf=str(elf), sha256=digest, command=[],
+                                result="SKIP", exit_code=77, log=str(log)))
+            print(f"[{len(results)}] {elf.name} SKIP (--skip pattern)", flush=True)
+            continue
         # Hash the ELF actually executed so subsequent rebuilds cannot obscure provenance.
         digest = hashlib.sha256(elf.read_bytes()).hexdigest()
         invocation = command + [str(elf)] if command else []
@@ -88,6 +118,10 @@ def main():
         results.append(dict(elf=str(elf), sha256=digest, command=invocation,
                             result=result, exit_code=code, log=str(log)))
         print(f"[{len(results)}] {elf.name} {result}", flush=True)
+    for pat in skip_patterns:
+        if skip_pattern_hits[pat] == 0:
+            print(f"WARNING: --skip pattern {pat!r} matched no ELFs (possible typo)",
+                  file=sys.stderr)
     (args.log_dir / "results.json").write_text(json.dumps(dict(
         total=len(results), counts=counts, tests=results), indent=2) + "\n")
     print(f"Total={len(results)} " + " ".join(f"{k}={counts[k]}" for k in

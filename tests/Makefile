@@ -5,14 +5,15 @@
 #   make ARCH=riscv64-spike-test run-test-hello
 #   make ARCH=riscv64-spike-test EXTENSIONS=V vector-tests
 
-.PHONY: help all-tests clean-tests list-tests check-test-basenames \
+.PHONY: help all-tests clean-tests check-elf-inventory list-tests check-test-basenames \
 		except-tests vector-tests rvv-new-tests rvvx-tests trig-tests \
 		check-rvv-count check-rvvx-count check-trig-count \
-		check-workload-count check-temp-count check-bugit-count check-mixua-count \
-		check-mpe-count check-uax-count \
-		memblock-it-tests workload-tests temp-tests bug-it-tests mix-ua-tests mpe-tests uax-tests spike-run \
+		check-workload-count check-bugit-count check-mixua-count \
+		check-mpe-count check-uax-count check-memblockit-count check-pcx-count \
+		memblock-it-tests workload-tests bug-it-tests mix-ua-tests mpe-tests uax-tests spike-run \
+		pcx-tests page-cross-spike-run \
 		rvv-new-spike-run rvvx-spike-run trig-spike-run \
-		workload-spike-run temp-spike-run bugit-spike-run mixua-spike-run mpe-spike-run uax-spike-run \
+		workload-spike-run bugit-spike-run mixua-spike-run mpe-spike-run uax-spike-run \
 		linknan-after-all-vector-spike
 
 AM_HOME ?= $(abspath ..)
@@ -20,13 +21,26 @@ export AM_HOME
 TESTS_DIR := $(abspath .)
 RVV_DIR := $(TESTS_DIR)/vector/spec
 RVVX_DIR := $(TESTS_DIR)/vector-cross
-TRIG_DIR := $(TESTS_DIR)/trigger
+TRIG_DIR := $(TESTS_DIR)/priv
 WORKLOAD_DIR := $(TESTS_DIR)/workload
-TEMP_DIR := $(TESTS_DIR)/temp
 BUGIT_DIR := $(TESTS_DIR)/bug-it
 MIXUA_DIR := $(TESTS_DIR)/mix-ua
 MPE_DIR := $(TESTS_DIR)/mpe
 UAX_DIR := $(TESTS_DIR)/uax
+PCX_DIR := $(TESTS_DIR)/page-cross
+
+# Suite inventory thresholds. Declared once so check-*-count and *-spike-run
+# agree; a single source prevents the two gates from drifting out of sync.
+RVV_EXPECTED := 100
+RVVX_EXPECTED := 1249
+TRIG_EXPECTED := 6
+WORKLOAD_EXPECTED := 96
+BUGIT_EXPECTED := 239
+MIXUA_EXPECTED := 500
+MPE_EXPECTED := 116
+UAX_EXPECTED := 500
+PCX_EXPECTED := 9
+MEMBLOCKIT_EXPECTED := 947
 
 # Platform makefiles append the complete test runtime. Pass only the selected
 # test here so start/trap/page/vector support is linked exactly once.
@@ -56,11 +70,10 @@ help:
 	@echo "  make ARCH=riscv64-spike-test workload-tests"
 	@echo "  make EXTENSIONS=V linknan-after-all-vector-spike"
 	@echo "  make check-test-basenames check-rvv-count check-rvvx-count"
-		@echo "  make check-trig-count"
+	@echo "  make check-trig-count"
 	@echo "  make check-workload-count"
-	@echo "  make ARCH=riscv64-spike-test temp-tests"
+	@echo "  make check-memblockit-count"
 	@echo "  make ARCH=riscv64-spike-test trig-tests"
-	@echo "  make check-temp-count"
 	@echo "  make check-bugit-count"
 	@echo "  make ARCH=riscv64-spike-test bug-it-tests"
 	@echo "  make check-mixua-count"
@@ -71,6 +84,9 @@ help:
 	@echo "  make check-uax-count"
 	@echo "  make ARCH=riscv64-spike-test EXTENSIONS=V uax-tests"
 	@echo "  make uax-spike-run"
+	@echo "  make check-pcx-count"
+	@echo "  make ARCH=riscv64-spike-test pcx-tests"
+	@echo "  make page-cross-spike-run"
 	@echo "  make check-qn-count                         # 500 directed + 100 large"
 	@echo "  make ARCH=riscv64-spike-test qn-directed-tests qn-large-tests"
 	@echo "  make qn-spike-run                           # rebuild and run all 600"
@@ -153,6 +169,7 @@ all-tests: check-test-basenames
 	@find $(TESTS_DIR)/smoke $(TESTS_DIR)/priv $(TESTS_DIR)/pmp \
 		$(TESTS_DIR)/page $(TESTS_DIR)/except $(TESTS_DIR)/memblock \
 		$(TESTS_DIR)/memblock-it $(TESTS_DIR)/workload \
+		$(TESTS_DIR)/atomic $(TESTS_DIR)/fp \
 		-type f -name '*.c' -print 2>/dev/null | \
 		sort -V | while read test; do \
 			TEST_NAME=$$(basename "$$test" .c); \
@@ -219,30 +236,30 @@ check-rvv-count:
 		[ "$$actual" -eq "$$expected" ] || BAD=1; TOTAL=$$((TOTAL + actual)); \
 	done; \
 	actual_all=$$(find $(RVV_DIR) -type f -name 'rvv_*.c' 2>/dev/null | wc -l); \
-	[ "$$actual_all" -eq 100 ] || BAD=1; [ "$$TOTAL" -eq "$$actual_all" ] || BAD=1; \
-	echo "RVV total expected=100 actual=$$actual_all"; \
+	[ "$$actual_all" -eq $(RVV_EXPECTED) ] || BAD=1; [ "$$TOTAL" -eq "$$actual_all" ] || BAD=1; \
+	echo "RVV total expected=$(RVV_EXPECTED) actual=$$actual_all"; \
 	[ "$$BAD" -eq 0 ] || { echo "Error: RVV category/count check failed"; exit 1; }
 
 # Inventory only. Whether a case needs tlb_selfcheck.h is an AI/human
 # review of the check-point vs Spike, not a filename/script rule.
 check-rvvx-count:
 	@actual=$$(find $(RVVX_DIR) -maxdepth 1 -type f -name 'rvvx_*.c' | wc -l); \
-	echo "RVVX total expected=1249 actual=$$actual"; \
-	[ "$$actual" -eq 1249 ] || { echo "Error: RVVX count check failed"; exit 1; }
+	echo "RVVX total expected=$(RVVX_EXPECTED) actual=$$actual"; \
+	[ "$$actual" -eq $(RVVX_EXPECTED) ] || { echo "Error: RVVX count check failed"; exit 1; }
 
 # Inventory only. Trigger cases are architectural (Spike Sdtrig); no
 # tlb_selfcheck unless a checkpoint is a translation-stage cause.
 check-trig-count:
 	@actual=$$(find $(TRIG_DIR) -maxdepth 1 -type f -name 'trig_*.c' | wc -l); \
-	echo "TRIG total expected=0 actual=$$actual"; \
-	[ "$$actual" -eq 0 ] || { echo "Error: TRIG count check failed"; exit 1; }
+	echo "TRIG total expected=$(TRIG_EXPECTED) actual=$$actual"; \
+	[ "$$actual" -eq $(TRIG_EXPECTED) ] || { echo "Error: TRIG count check failed"; exit 1; }
 
 # Inventory only. Each wl_*.c is a hand-written algorithm kernel plus a
 # trap/page/pmp/priv (or GUARD) cross; do not generate these files.
 check-workload-count:
 	@actual=$$(find $(WORKLOAD_DIR) -maxdepth 1 -type f -name 'wl_*.c' | wc -l); \
-	echo "workload total expected=96 actual=$$actual"; \
-	[ "$$actual" -eq 96 ] || { echo "Error: workload count check failed"; exit 1; }
+	echo "workload total expected=$(WORKLOAD_EXPECTED) actual=$$actual"; \
+	[ "$$actual" -eq $(WORKLOAD_EXPECTED) ] || { echo "Error: workload count check failed"; exit 1; }
 
 workload-tests: check-workload-count check-test-basenames
 	@echo "Building workload tests for $(ARCH)..."
@@ -253,26 +270,13 @@ workload-tests: check-workload-count check-test-basenames
 	done
 
 
-# Scratch / exploratory suite. Not part of all-tests. Inventory only.
-check-temp-count:
-	@actual=$$(find $(TEMP_DIR) -maxdepth 1 -type f -name 'tmp_*.c' | wc -l); \
-	echo "temp total expected=94 actual=$$actual"; \
-	[ "$$actual" -eq 94 ] || { echo "Error: temp count check failed"; exit 1; }
-
-temp-tests: check-temp-count check-test-basenames
-	@echo "Building temp tests for $(ARCH)..."
-	@find $(TEMP_DIR) -maxdepth 1 -type f -name 'tmp_*.c' -print | sort -V | \
-	while read test; do \
-		TEST_NAME=$$(basename "$$test" .c); \
-		$(MAKE) test-$$TEST_NAME ARCH=$(ARCH) EXTENSIONS=$(EXTENSIONS) || exit 1; \
-	done
 
 # Known-bug expansion (Bug1 SQ wakeup / Bug2 tdata2). Not in all-tests.
 # Inventory only. Do not check in a generator for these files.
 check-bugit-count:
 	@actual=$$(find $(BUGIT_DIR) -maxdepth 1 -type f -name 'bugit_*.c' | wc -l); \
-	echo "bug-it total expected=200 actual=$$actual"; \
-	[ "$$actual" -eq 200 ] || { echo "Error: bug-it count check failed"; exit 1; }
+	echo "bug-it total expected=$(BUGIT_EXPECTED) actual=$$actual"; \
+	[ "$$actual" -eq $(BUGIT_EXPECTED) ] || { echo "Error: bug-it count check failed"; exit 1; }
 
 bug-it-tests: check-bugit-count check-test-basenames
 	@echo "Building bug-it tests for $(ARCH)..."
@@ -288,15 +292,15 @@ bug-it-tests: check-bugit-count check-test-basenames
 # Vector mix_v_*.c need EXTENSIONS=V. Inventory 500 mix_*.c.
 check-mixua-count:
 	@actual=$$(find $(MIXUA_DIR) -maxdepth 1 -type f -name 'mix_*.c' | wc -l); \
-	echo "mix-ua total expected=500 actual=$$actual"; \
-	[ "$$actual" -eq 500 ] || { echo "Error: mix-ua count check failed"; exit 1; }
+	echo "mix-ua total expected=$(MIXUA_EXPECTED) actual=$$actual"; \
+	[ "$$actual" -eq $(MIXUA_EXPECTED) ] || { echo "Error: mix-ua count check failed"; exit 1; }
 
 # 4-hart MPE. Not in all-tests. Compile ELF only — Spike is not the admission gate.
 # 16 scalar + 100 mpe_v_* (need EXTENSIONS=V). Do not hardlink into all-in-one.
 check-mpe-count:
 	@actual=$$(find $(MPE_DIR) -maxdepth 1 -type f -name 'mpe_*.c' | wc -l); \
-	echo "mpe total expected=116 actual=$$actual"; \
-	[ "$$actual" -eq 116 ] || { echo "Error: mpe count check failed"; exit 1; }
+	echo "mpe total expected=$(MPE_EXPECTED) actual=$$actual"; \
+	[ "$$actual" -eq $(MPE_EXPECTED) ] || { echo "Error: mpe count check failed"; exit 1; }
 
 mpe-tests: check-mpe-count check-test-basenames
 	@test "$(HARTS)" = 4 || { echo "MPE workloads require HARTS=4"; exit 1; }
@@ -337,8 +341,8 @@ mix-ua-tests: check-mixua-count check-test-basenames
 # 80 sc + 40 fp + 90 dbg + 110 ex + 180 v. Vector uax_v_* need EXTENSIONS=V.
 check-uax-count:
 	@actual=$$(find $(UAX_DIR) -maxdepth 1 -type f -name 'uax_*.c' | wc -l); \
-	echo "uax total expected=500 actual=$$actual"; \
-	[ "$$actual" -eq 500 ] || { echo "Error: uax count check failed"; exit 1; }
+	echo "uax total expected=$(UAX_EXPECTED) actual=$$actual"; \
+	[ "$$actual" -eq $(UAX_EXPECTED) ] || { echo "Error: uax count check failed"; exit 1; }
 
 uax-tests: check-uax-count check-test-basenames
 	@echo "Building uax tests for $(ARCH) EXTENSIONS=$(EXTENSIONS)..."
@@ -357,7 +361,32 @@ uax-tests: check-uax-count check-test-basenames
 		$(MAKE) test-$$TEST_NAME ARCH=$(ARCH) EXTENSIONS=$(EXTENSIONS) || exit 1; \
 	done
 
-memblock-it-tests: check-test-basenames
+# Inventory only. Page-boundary stimulus for scalar / AMO / LR-SC accesses.
+# Every case uses the same four-page window from pcx.h and asserts either a
+# split access that succeeds or an access fault/page fault that must not
+# split. Deliberately never arms CAUSE_MISALIGNED_*: SPIKE_ISA appends
+# _zicclsm, which absorbs misaligned accesses and leaves such an arm unfired.
+check-pcx-count:
+	@actual=$$(find $(PCX_DIR) -maxdepth 1 -type f -name 'pcx_*.c' | wc -l); \
+	echo "page-cross total expected=$(PCX_EXPECTED) actual=$$actual"; \
+	[ "$$actual" -eq $(PCX_EXPECTED) ] || { echo "Error: page-cross count check failed"; exit 1; }
+
+pcx-tests: check-pcx-count check-test-basenames
+	@echo "Building page-cross tests for $(ARCH)..."
+	@find $(PCX_DIR) -maxdepth 1 -type f -name 'pcx_*.c' -print | sort -V | \
+	while read test; do \
+		TEST_NAME=$$(basename "$$test" .c); \
+		$(MAKE) test-$$TEST_NAME ARCH=$(ARCH) EXTENSIONS=$(EXTENSIONS) || exit 1; \
+	done
+
+# Inventory only. Largest hand-maintained suite; every case
+# #includes selfcheck.h. Do not regenerate the numbered cases.
+check-memblockit-count:
+	@actual=$$(find $(TESTS_DIR)/memblock-it -maxdepth 1 -type f -name 'test_*.c' | wc -l); \
+	echo "memblock-it total expected=$(MEMBLOCKIT_EXPECTED) actual=$$actual"; \
+	[ "$$actual" -eq $(MEMBLOCKIT_EXPECTED) ] || { echo "Error: memblock-it count check failed"; exit 1; }
+
+memblock-it-tests: check-memblockit-count check-test-basenames
 	@echo "Building MemBlock-IT tests for $(ARCH)..."
 	@TEST_FILES=$$(find "$(TESTS_DIR)/memblock-it" -type f -name 'test_*.c' -print) || exit 1; \
 	if [ -z "$$TEST_FILES" ]; then echo "Error: no MemBlock-IT tests found"; exit 1; fi; \
@@ -382,52 +411,123 @@ clean-tests:
 	rm -rf $(AM_HOME)/build/riscv64-spike-test $(AM_HOME)/build/riscv64-linknan-test
 	rm -f $(AM_HOME)/build/spike-*.log $(AM_HOME)/build/spike-*-failures.txt
 
+# Cross-check: every .c in the all-tests suites must have a matching ELF in
+# all-in-one, and no extra ELFs should exist for those names. Run after
+# building all-tests to catch rename/delete collisions like the mix_/exc_ case.
+check-elf-inventory:
+	@ELF_DIR=$(SPIKE_ELF_DIR); \
+	if [ ! -d "$$ELF_DIR" ]; then \
+		echo "Error: ELF dir $$ELF_DIR not found; run all-tests first"; exit 1; \
+	fi; \
+	MISSING=0; \
+	for src in $$(find $(TESTS_DIR)/smoke $(TESTS_DIR)/priv $(TESTS_DIR)/pmp \
+			$(TESTS_DIR)/page $(TESTS_DIR)/except $(TESTS_DIR)/memblock \
+			$(TESTS_DIR)/atomic $(TESTS_DIR)/fp \
+			-type f -name '*.c' 2>/dev/null | sort -V); do \
+		name=$$(basename "$$src" .c); \
+		if [ ! -f "$$ELF_DIR/test-$$name.elf" ]; then \
+			echo "MISSING ELF: test-$$name.elf (from $$src)"; MISSING=$$((MISSING + 1)); \
+		fi; \
+	done; \
+	if [ "$$MISSING" -ne 0 ]; then \
+		echo "Error: $$MISSING ELF(s) missing from $$ELF_DIR"; exit 1; \
+	fi; \
+	echo "ELF inventory OK"
+
 TEST_CONFIG_ONLY := 1
 include $(AM_HOME)/scripts/riscv64-spike-test.mk
 undefine TEST_CONFIG_ONLY
 SPIKE_ELF_DIR := $(AM_HOME)/build/Spike/all-in-one
 
+# Tests that exercise micro-architectural behaviour Spike does not model
+# (breakpoint-triggered vl reduction, mtval
+# precision on vector faults, mstatus.FS dirty tracking, vill propagation).
+# They are compiled and included in the all-in-one ELF count but skipped at
+# execution time; the RTL regression runs them without this skip list.
+SPIKE_RTL_ONLY := \
+    test-v_fof_bp_vl_notreduced \
+    test-v_fof_double_exc_xserror \
+    test-v_fof_nonzero_bp_allowed \
+    test-v_fof_nonzero_elem_stale \
+    test-v_fof_nonzero_no_exc_write \
+    test-v_fof_seg_vl_reduce \
+    test-v_opfvf_nan_forward_32 \
+    test-v_trig_elem_ea_strided \
+    test-v_us_bp_second_flow_mtval \
+    test-v_vec_double_excp_seq \
+    test-v_vec_us_bp_mtval \
+    test-v_vec_us_trig_multi_elem \
+    test-v_vecld_elem0_exc_vs \
+    test-v_vecld_misalign_trigger \
+    test-v_vfmerge_no_fs_dirty \
+    test-v_vfsgnj_fs_dirty \
+    test-v_vlmergebuf_trigger_false_bp \
+    test-v_vmfle_nan_mask_v0rd \
+    test-v_vsetvl_elemidx_split \
+    test-v_vsetvl_x0x0_vill
+SPIKE_RTL_ONLY_FLAGS = $(foreach t,$(SPIKE_RTL_ONLY),--skip $(t))
+
 # These suites contain vector workloads even when their scalar cases omit V.
 qn-spike-run qn-linknan-workloads rvv-new-spike-run rvvx-spike-run \
-mpe-spike-run mixua-spike-run uax-spike-run: EXTENSIONS = V
+mpe-spike-run mixua-spike-run uax-spike-run spike-run: EXTENSIONS = V
+
+# The spike gates build first, so they cannot rely on an inherited ARCH.
+# A bare `make <suite>-spike-run` must not fail on an unrelated ambient ARCH.
+qn-spike-run rvv-new-spike-run rvvx-spike-run workload-spike-run \
+trig-spike-run bugit-spike-run mixua-spike-run uax-spike-run \
+mpe-spike-run page-cross-spike-run: ARCH = riscv64-spike-test
 
 spike-run:
 	@$(SPIKE_RUN) --timeout $(SPIKE_TIMEOUT) \
 		--elf '$(SPIKE_ELF_DIR)/test-*.elf' \
-		--log-dir '$(AM_HOME)/build/spike-run' -- $(SPIKE_COMMAND)
+		--log-dir '$(AM_HOME)/build/spike-run' \
+		$(SPIKE_RTL_ONLY_FLAGS) -- $(SPIKE_COMMAND); \
+	RET=$$?; [ $$RET -eq 0 ] || [ $$RET -eq 77 ]
 
 rvv-new-spike-run: SPIKE_SUITE_PATTERN = test-rvv_*.elf
-rvv-new-spike-run: SPIKE_SUITE_EXPECTED = 100
+rvv-new-spike-run: SPIKE_SUITE_EXPECTED = $(RVV_EXPECTED)
 rvv-new-spike-run: SPIKE_SUITE_NAME = rvv-new
 rvvx-spike-run: SPIKE_SUITE_PATTERN = test-rvvx_*.elf
-rvvx-spike-run: SPIKE_SUITE_EXPECTED = 1249
+rvvx-spike-run: SPIKE_SUITE_EXPECTED = $(RVVX_EXPECTED)
 rvvx-spike-run: SPIKE_SUITE_NAME = rvvx
 workload-spike-run: SPIKE_SUITE_PATTERN = test-wl_*.elf
-workload-spike-run: SPIKE_SUITE_EXPECTED = 96
+workload-spike-run: SPIKE_SUITE_EXPECTED = $(WORKLOAD_EXPECTED)
 workload-spike-run: SPIKE_SUITE_NAME = workload
-temp-spike-run: SPIKE_SUITE_PATTERN = test-tmp_*.elf
-temp-spike-run: SPIKE_SUITE_EXPECTED = 94
-temp-spike-run: SPIKE_SUITE_NAME = temp
 trig-spike-run: SPIKE_SUITE_PATTERN = test-trig_*.elf
-trig-spike-run: SPIKE_SUITE_EXPECTED = 0
+trig-spike-run: SPIKE_SUITE_EXPECTED = $(TRIG_EXPECTED)
 trig-spike-run: SPIKE_SUITE_NAME = trig
 bugit-spike-run: SPIKE_SUITE_PATTERN = test-bugit_*.elf
-bugit-spike-run: SPIKE_SUITE_EXPECTED = 200
+bugit-spike-run: SPIKE_SUITE_EXPECTED = $(BUGIT_EXPECTED)
 bugit-spike-run: SPIKE_SUITE_NAME = bugit
-rvv-new-spike-run rvvx-spike-run workload-spike-run temp-spike-run trig-spike-run bugit-spike-run:
+rvv-new-spike-run: rvv-new-tests
+rvvx-spike-run: rvvx-tests
+workload-spike-run: workload-tests
+trig-spike-run: trig-tests
+bugit-spike-run: bug-it-tests
+rvv-new-spike-run rvvx-spike-run workload-spike-run trig-spike-run bugit-spike-run:
 	@$(SPIKE_RUN) --timeout $(SPIKE_TIMEOUT) --expected $(SPIKE_SUITE_EXPECTED) \
 		--elf '$(SPIKE_ELF_DIR)/$(SPIKE_SUITE_PATTERN)' \
-		--log-dir '$(AM_HOME)/build/spike-$(SPIKE_SUITE_NAME)' -- $(SPIKE_COMMAND)
+		--log-dir '$(AM_HOME)/build/spike-$(SPIKE_SUITE_NAME)' \
+		$(SPIKE_RTL_ONLY_FLAGS) -- $(SPIKE_COMMAND); \
+	RET=$$?; [ $$RET -eq 0 ] || [ $$RET -eq 77 ]
 
-mixua-spike-run:
-	@$(SPIKE_RUN) --timeout $(SPIKE_TIMEOUT) --expected 380 500 \
+# EXTENSIONS=V is forced below, so all 500 are built and all 500 must run.
+# A 380/320 lower bound would admit a half-built suite as green.
+mixua-spike-run: mix-ua-tests
+	@$(SPIKE_RUN) --timeout $(SPIKE_TIMEOUT) --expected $(MIXUA_EXPECTED) \
 		--elf '$(SPIKE_ELF_DIR)/test-mix_*.elf' \
 		--log-dir '$(AM_HOME)/build/spike-mixua' -- $(SPIKE_COMMAND)
 
-uax-spike-run:
-	@$(SPIKE_RUN) --timeout $(SPIKE_TIMEOUT) --expected 320 500 \
+uax-spike-run: uax-tests
+	@$(SPIKE_RUN) --timeout $(SPIKE_TIMEOUT) --expected $(UAX_EXPECTED) \
 		--elf '$(SPIKE_ELF_DIR)/test-uax_*.elf' \
 		--log-dir '$(AM_HOME)/build/spike-uax' -- $(SPIKE_COMMAND)
+
+# Scalar/runtime only -- no vector, so EXTENSIONS is left alone.
+page-cross-spike-run: pcx-tests
+	@$(SPIKE_RUN) --timeout $(SPIKE_TIMEOUT) --expected $(PCX_EXPECTED) \
+		--elf '$(SPIKE_ELF_DIR)/test-pcx_*.elf' \
+		--log-dir '$(AM_HOME)/build/spike-pcx' -- $(SPIKE_COMMAND)
 
 # MPE is opt-in and kept outside the single-hart all-in-one sweep.
 mpe-spike-run: check-mpe-count

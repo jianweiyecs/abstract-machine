@@ -25,6 +25,11 @@ RUNTIME_DEFINES = -DHART_MAX=$(HARTS) -DHART_BASE=$(HART_BASE) \
   -DSTACK_SIZE=$(STACK_SIZE) -DTRAP_STACK_SIZE=$(TRAP_STACK_SIZE) \
   -DDRAM_BASE=$(DRAM_BASE) -DDRAM_SIZE=$(DRAM_SIZE) \
   -DUART_BASE=$(UART_BASE) -DCLINT_BASE=$(CLINT_BASE)
+# -fno-tree-vectorize: scalar cases must not gain compiler-generated vector
+#   code. mix-ua/uax toggle vector_enable() mid-case and would otherwise execute
+#   vector insns while mstatus.VS is still Off.
+# -mno-relax: keep the hand-written access sequences intact so a case's
+#   declared store/load width is what actually issues.
 override CFLAGS += -march=$(RISCV_ARCH) -mabi=$(RISCV_ABI) -mcmodel=medany \
   -ffreestanding -fno-builtin -fno-common -fno-stack-protector \
   -fno-pic -mno-relax -fno-tree-vectorize $(RUNTIME_DEFINES) \
